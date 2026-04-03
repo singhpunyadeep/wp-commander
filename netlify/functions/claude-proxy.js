@@ -23,7 +23,7 @@ exports.handler = async function (event) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
+        max_tokens: body.maxTokens || 1000,
         system: body.system || "You are WP Commander, an expert WordPress content strategist and SEO specialist.",
         messages: body.messages || [{ role: "user", content: body.prompt || "" }],
       }),
