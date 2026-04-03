@@ -3,6 +3,15 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+
+[functions."claude-proxy"]
+  timeout = 26
+
+[functions."wp-proxy"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
