@@ -183,7 +183,7 @@ function CreatePost({ site }) {
   const [topic, setTopic] = useState(""); const [kw, setKw] = useState(""); const [tone, setTone] = useState("professional"); const [wc, setWc] = useState("1500");
   const [cat, setCat] = useState(""); const [cats, setCats] = useState([]); const [gen, setGen] = useState(false); const [out, setOut] = useState(null);
   const [pub, setPub] = useState(false); const [status, setStatus] = useState("draft"); const [msg, setMsg] = useState(null); const [step, setStep] = useState("form");
-  const [addLinks, setAddLinks] = useState(true); const [genStatus, setGenStatus] = useState("");
+  const [addLinks, setAddLinks] = useState(false); const [genStatus, setGenStatus] = useState("");
 
   useEffect(() => { if (site) wpFetch(site, "/categories?per_page=100").then(r => r.json()).then(d => Array.isArray(d) && setCats(d)).catch(() => {}); }, [site]);
 
@@ -207,7 +207,7 @@ function CreatePost({ site }) {
       const r = await claude(
         `Write SEO-optimized WordPress blog post: "${topic}"\nKeyword: ${kw||topic}\nTone: ${tone}\nWords: ~${wc}\n${linkInstruction}\nReturn EXACTLY:\nTITLE: [title]\n---\n[full HTML content]\n---META---\nMETATITLE: [max 60 chars]\nMETADESC: [max 155 chars]`,
         "Expert supply chain content writer. Follow the format exactly. Weave links naturally into content.",
-        4000
+        2500
       );
       const [main, metaPart] = r.split("---META---"); const parts = main.split("---");
       const title = (parts[0].match(/TITLE:\s*(.+)/)||[])[1]?.trim()||topic;
@@ -652,9 +652,20 @@ function Monetize({ site }) {
 
 // settings
 function Settings({ sites, onDeleteSite }) {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("wpc_api_key") || "");
+  const [keySaved, setKeySaved] = useState(false);
+  const saveKey = () => { localStorage.setItem("wpc_api_key", apiKey); window.__WPC_KEY__ = apiKey; setKeySaved(true); setTimeout(() => setKeySaved(false), 2000); };
   return (
     <div>
       <div className="section-title">Settings</div><div className="section-sub">Manage connected WordPress sites</div>
+      <div className="card mb-12"><div className="card-title">Anthropic API Key</div>
+        <div className="text-sm mb-12">Required for AI features. Get yours from <strong>console.anthropic.com</strong></div>
+        <div className="flex gap-8 items-center">
+          <input className="input" type="password" placeholder="sk-ant-..." value={apiKey} onChange={e=>setApiKey(e.target.value)} style={{flex:1}}/>
+          <button className="btn btn-primary" onClick={saveKey}>{keySaved?"✓ Saved!":"Save Key"}</button>
+        </div>
+        {window.__WPC_KEY__ && <div className="alert alert-success mt-8">✓ API key active</div>}
+      </div>
       <div className="card mb-12"><div className="card-title">Connected Sites ({sites.length})</div>
         {!sites.length?<div className="empty"><div className="empty-icon">⬡</div><div className="empty-text">No sites yet</div></div>:
         <table className="table"><thead><tr><th>Name</th><th>URL</th><th>User</th><th></th></tr></thead>
@@ -674,6 +685,7 @@ export default function App() {
   const [activeTab, setTab] = useState("dashboard");
   const [showAdd, setShowAdd] = useState(false);
   const activeSite = sites.find(s=>s.id===activeSiteId)||sites[0]||null;
+
   useEffect(()=>{ try { localStorage.setItem(STORAGE_KEY,JSON.stringify(sites)); } catch {} },[sites]);
   useEffect(()=>{ try { localStorage.setItem("wpcommander_active",activeSiteId); } catch {} },[activeSiteId]);
   useEffect(()=>{ if(sites.length&&!activeSiteId) setActive(sites[0].id); },[sites]);
