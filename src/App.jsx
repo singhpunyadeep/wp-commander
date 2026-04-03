@@ -190,73 +190,56 @@ function CreatePost({ site }) {
   const generate = async () => {
     if (!topic) return; setGen(true); setMsg(null);
     try {
-      // STEP 1: Fetch existing posts for internal links
-      let internalLinksContext = "";
+      const sys = "Expert supply chain content writer. Write detailed HTML only (h2,h3,p,ul,li tags). No preamble. Never truncate.";
+
+      // STEP 1: fetch posts for internal links
+      let linkCtx = "";
       if (addLinks && site) {
-        setGenStatus("Loading your posts for internal links...");
+        setGenStatus("Loading posts for internal links...");
         try {
-          const r = await wpFetch(site, "/posts?per_page=30&status=publish");
+          const r = await wpFetch(site, "/posts?per_page=20&status=publish");
           const posts = await r.json();
-          if (Array.isArray(posts) && posts.length) {
-            internalLinksContext = posts.slice(0,15).map(p => `- ${strip(p.title?.rendered)}: ${site.url.replace(/\/$/, "")}/?p=${p.id}`).join("\n");
-          }
+          if (Array.isArray(posts) && posts.length)
+            linkCtx = posts.slice(0,10).map(p => strip(p.title?.rendered) + ": " + site.url.replace(/\/$/, "") + "/?p=" + p.id).join("\n");
         } catch {}
       }
-
-      // STEP 2: Generate article body (no meta, focused on content only)
-      setGenStatus("Step 1/3: Writing article...");
-      const linkInstruction = addLinks
-        ? `\nINTERNAL LINKS: Naturally weave 3-5 links from these posts:\n${internalLinksContext||"none"}\nEXTERNAL LINKS: Add 3-5 links to APICS, Gartner, McKinsey, Harvard Business Review (real URLs).\nUse <a href="URL">anchor</a> for internal, <a href="URL" target="_blank" rel="noopener">anchor</a> for external.`
+      const linkNote = (addLinks && linkCtx)
+        ? "Add 2-3 internal links from these posts:\n" + linkCtx + "\nAdd 2-3 external links to APICS/Gartner/McKinsey. Use <a href='URL'>text</a> inline."
         : "";
 
-      const articleR = await claude(
-        `Write a ${wc}-word SEO blog post for a supply chain professional audience.
-Topic: "${topic}"
-Target keyword: "${kw||topic}"
-Tone: ${tone}
-
-Requirements:
-- Start with an engaging introduction
-- Use H2 and H3 subheadings to structure sections
-- Write in full paragraphs, not bullet points
-- Include practical examples relevant to FMCG
-- End with a conclusion and call to action
-- Target exactly ~${wc} words${linkInstruction}
-
-Return ONLY the HTML body content (h2, h3, p, ul, li tags). No title tag. No preamble. Start directly with the first paragraph or h2.`,
-        "You are an expert supply chain content writer. Write detailed, comprehensive, SEO-optimised articles. Never truncate. Always write the full requested word count.",
-        2200
+      // STEP 2: first half of article
+      setGenStatus("Step 1/3: Writing first half...");
+      const half1 = await claude(
+        "Write the FIRST HALF of a " + wc + "-word blog post.\nTopic: " + topic + "\nKeyword: " + (kw||topic) + "\nTone: " + tone + "\nInclude: intro paragraph then 2-3 H2 sections with full paragraphs.\n" + linkNote + "\nStop at halfway — NO conclusion. Return HTML only.",
+        sys, 1100
       );
 
-      // STEP 3: Generate title + meta separately
-      setGenStatus("Step 2/3: Generating SEO meta...");
+      // STEP 3: second half of article
+      setGenStatus("Step 2/3: Writing second half...");
+      const half2 = await claude(
+        "Write the SECOND HALF of a blog post about: " + topic + "\nContinue from where first half ended. Include 2-3 more H2 sections then a conclusion with CTA.\n" + linkNote + "\nReturn HTML only. Do not repeat intro.",
+        sys, 1100
+      );
+
+      // STEP 4: meta
+      setGenStatus("Step 3/3: Generating SEO meta...");
       const metaR = await claude(
-        `For a supply chain blog post about: "${topic}"
-Target keyword: "${kw||topic}"
-
-Return EXACTLY:
-TITLE: [compelling SEO title, max 65 chars]
-METATITLE: [meta title, max 60 chars, include keyword]
-METADESC: [meta description, max 155 chars, include keyword and CTA]`,
-        "SEO expert. Return only the three fields in exact format requested.",
-        200
+        "Blog post: " + topic + " | Keyword: " + (kw||topic) + "\nReturn EXACTLY:\nTITLE: [SEO title max 65 chars]\nMETATITLE: [max 60 chars with keyword]\nMETADESC: [max 155 chars with keyword and CTA]",
+        "SEO expert. Return only the three labeled fields.", 180
       );
 
-      setGenStatus("Step 3/3: Finalising...");
-      const title = (metaR.match(/TITLE:\s*(.+)/)||[])[1]?.trim() || topic;
-      const metaTitle = (metaR.match(/METATITLE:\s*(.+)/)||[])[1]?.trim() || title.slice(0,60);
-      const metaDesc = (metaR.match(/METADESC:\s*(.+)/)||[])[1]?.trim() || "";
-      const extCount = (articleR.match(/target="_blank"/g)||[]).length;
-      const intCount = addLinks ? (articleR.match(/\/\?p=/g)||[]).length : 0;
+      const fullContent = half1.trim() + "\n" + half2.trim();
+      const title = (metaR.match(/TITLE:\s*(.+)/) || [])[1]?.trim() || topic;
+      const metaTitle = (metaR.match(/METATITLE:\s*(.+)/) || [])[1]?.trim() || title.slice(0, 60);
+      const metaDesc = (metaR.match(/METADESC:\s*(.+)/) || [])[1]?.trim() || "";
+      const extCount = (fullContent.match(/target="_blank"/g) || []).length;
+      const intCount = (fullContent.match(/\?p=/g) || []).length;
 
-      setOut({ title, content: articleR.trim(), metaTitle, metaDesc, extCount, intCount });
+      setOut({ title, content: fullContent, metaTitle, metaDesc, extCount, intCount });
       setStep("review");
     } catch(e) { setMsg({ type:"error", text:e.message }); }
     setGen(false); setGenStatus("");
   };
-
-  const publish = async () => {
-    setPub(true); setMsg(null);
     try {
       const r = await wpFetch(site, "/posts", { method:"POST", body:JSON.stringify({ title:out.title, content:out.content, status, ...(cat?{categories:[parseInt(cat)]}:{}) }) });
       const d = await r.json();
