@@ -188,8 +188,9 @@ function CreatePost({ site }) {
   useEffect(() => { if (site) wpFetch(site, "/categories?per_page=100").then(r => r.json()).then(d => Array.isArray(d) && setCats(d)).catch(() => {}); }, [site]);
 
   const generate = async () => {
-    if (!topic) return; setGen(true); setMsg(null); setGenStatus("Writing post...");
+    if (!topic) return; setGen(true); setMsg(null);
     try {
+      // STEP 1: Fetch existing posts for internal links
       let internalLinksContext = "";
       if (addLinks && site) {
         setGenStatus("Loading your posts for internal links...");
@@ -197,23 +198,58 @@ function CreatePost({ site }) {
           const r = await wpFetch(site, "/posts?per_page=30&status=publish");
           const posts = await r.json();
           if (Array.isArray(posts) && posts.length) {
-            internalLinksContext = posts.map(p => `- ${strip(p.title?.rendered)}: ${site.url.replace(/\/$/, "")}/?p=${p.id}`).join("\n");
+            internalLinksContext = posts.slice(0,15).map(p => `- ${strip(p.title?.rendered)}: ${site.url.replace(/\/$/, "")}/?p=${p.id}`).join("\n");
           }
         } catch {}
-        setGenStatus("Claude is writing your post...");
       }
-      const linkInstruction = addLinks ? `\nINTERNAL LINKS: Weave 3-5 internal links naturally into the content using these posts (use the exact URLs):\n${internalLinksContext || "No existing posts — skip internal links."}\n\nEXTERNAL LINKS: Include 3-5 external links to authoritative sources (Gartner, McKinsey, APICS, Harvard Business Review, Supply Chain Management Review, or reputable supply chain sites). Use realistic URLs.\n\nFor all links use: <a href="URL" target="_blank" rel="noopener">anchor text</a>\nInternal links: omit target="_blank".\nPlace links naturally in content — never bunch them together.` : "";
 
-      const r = await claude(
-        `Write SEO-optimized WordPress blog post: "${topic}"\nKeyword: ${kw||topic}\nTone: ${tone}\nWords: ~${wc}\n${linkInstruction}\nReturn EXACTLY:\nTITLE: [title]\n---\n[full HTML content]\n---META---\nMETATITLE: [max 60 chars]\nMETADESC: [max 155 chars]`,
-        "Expert supply chain content writer. Follow the format exactly. Weave links naturally into content.",
-        2500
+      // STEP 2: Generate article body (no meta, focused on content only)
+      setGenStatus("Step 1/3: Writing article...");
+      const linkInstruction = addLinks
+        ? `\nINTERNAL LINKS: Naturally weave 3-5 links from these posts:\n${internalLinksContext||"none"}\nEXTERNAL LINKS: Add 3-5 links to APICS, Gartner, McKinsey, Harvard Business Review (real URLs).\nUse <a href="URL">anchor</a> for internal, <a href="URL" target="_blank" rel="noopener">anchor</a> for external.`
+        : "";
+
+      const articleR = await claude(
+        `Write a ${wc}-word SEO blog post for a supply chain professional audience.
+Topic: "${topic}"
+Target keyword: "${kw||topic}"
+Tone: ${tone}
+
+Requirements:
+- Start with an engaging introduction
+- Use H2 and H3 subheadings to structure sections
+- Write in full paragraphs, not bullet points
+- Include practical examples relevant to FMCG
+- End with a conclusion and call to action
+- Target exactly ~${wc} words${linkInstruction}
+
+Return ONLY the HTML body content (h2, h3, p, ul, li tags). No title tag. No preamble. Start directly with the first paragraph or h2.`,
+        "You are an expert supply chain content writer. Write detailed, comprehensive, SEO-optimised articles. Never truncate. Always write the full requested word count.",
+        2200
       );
-      const [main, metaPart] = r.split("---META---"); const parts = main.split("---");
-      const title = (parts[0].match(/TITLE:\s*(.+)/)||[])[1]?.trim()||topic;
-      const content = parts[1]?.trim()||main;
-      const extCount = (content.match(/target="_blank"/g)||[]).length;
-      setOut({ title, content, metaTitle: (metaPart?.match(/METATITLE:\s*(.+)/)||[])[1]?.trim()||title.slice(0,60), metaDesc: (metaPart?.match(/METADESC:\s*(.+)/)||[])[1]?.trim()||"", extCount });
+
+      // STEP 3: Generate title + meta separately
+      setGenStatus("Step 2/3: Generating SEO meta...");
+      const metaR = await claude(
+        `For a supply chain blog post about: "${topic}"
+Target keyword: "${kw||topic}"
+
+Return EXACTLY:
+TITLE: [compelling SEO title, max 65 chars]
+METATITLE: [meta title, max 60 chars, include keyword]
+METADESC: [meta description, max 155 chars, include keyword and CTA]`,
+        "SEO expert. Return only the three fields in exact format requested.",
+        200
+      );
+
+      setGenStatus("Step 3/3: Finalising...");
+      const title = (metaR.match(/TITLE:\s*(.+)/)||[])[1]?.trim() || topic;
+      const metaTitle = (metaR.match(/METATITLE:\s*(.+)/)||[])[1]?.trim() || title.slice(0,60);
+      const metaDesc = (metaR.match(/METADESC:\s*(.+)/)||[])[1]?.trim() || "";
+      const extCount = (articleR.match(/target="_blank"/g)||[]).length;
+      const intCount = addLinks ? (articleR.match(/\/\?p=/g)||[]).length : 0;
+
+      setOut({ title, content: articleR.trim(), metaTitle, metaDesc, extCount, intCount });
       setStep("review");
     } catch(e) { setMsg({ type:"error", text:e.message }); }
     setGen(false); setGenStatus("");
@@ -258,7 +294,8 @@ function CreatePost({ site }) {
         <div className="flex gap-8 items-center mb-12">
           <button className="btn btn-ghost btn-sm" onClick={()=>setStep("form")}>← Back</button>
           <span className="tag tag-green">Review before publishing</span>
-          {out.extCount>0 && <span className="tag tag-purple">🔗 {out.extCount} external links added</span>}
+          {out.extCount>0 && <span className="tag tag-purple">{out.extCount} external links</span>}
+          {out.intCount>0 && <span className="tag tag-green">{out.intCount} internal links</span>}
         </div>
         <div className="card mb-12"><div className="card-title">Title</div><input className="input" value={out.title} onChange={e=>setOut(o=>({...o,title:e.target.value}))}/></div>
         <div className="card mb-12">
