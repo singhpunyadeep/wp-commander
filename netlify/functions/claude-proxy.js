@@ -37,7 +37,10 @@ exports.handler = async function (event) {
       }, (res) => {
         let raw = "";
         res.on("data", chunk => raw += chunk);
-        res.on("end", () => { try { resolve(JSON.parse(raw)); } catch(e) { reject(new Error("Invalid JSON from API: " + raw.slice(0,100))); } });
+        res.on("end", () => {
+          try { resolve(JSON.parse(raw)); }
+          catch(e) { reject(new Error("API parse error: " + raw.slice(0, 200))); }
+        });
       });
       req.on("error", reject);
       req.write(payload);
