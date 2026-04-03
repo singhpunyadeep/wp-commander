@@ -183,17 +183,42 @@ function CreatePost({ site }) {
   const [topic, setTopic] = useState(""); const [kw, setKw] = useState(""); const [tone, setTone] = useState("professional"); const [wc, setWc] = useState("1500");
   const [cat, setCat] = useState(""); const [cats, setCats] = useState([]); const [gen, setGen] = useState(false); const [out, setOut] = useState(null);
   const [pub, setPub] = useState(false); const [status, setStatus] = useState("draft"); const [msg, setMsg] = useState(null); const [step, setStep] = useState("form");
+  const [addLinks, setAddLinks] = useState(true); const [genStatus, setGenStatus] = useState("");
+
   useEffect(() => { if (site) wpFetch(site, "/categories?per_page=100").then(r => r.json()).then(d => Array.isArray(d) && setCats(d)).catch(() => {}); }, [site]);
+
   const generate = async () => {
-    if (!topic) return; setGen(true); setMsg(null);
+    if (!topic) return; setGen(true); setMsg(null); setGenStatus("Writing post...");
     try {
-      const r = await claude(`Write SEO-optimized WordPress post: "${topic}"\nKeyword: ${kw||topic}\nTone: ${tone}\nWords: ~${wc}\nReturn EXACTLY:\nTITLE: [title]\n---\n[HTML content]\n---META---\nMETATITLE: [max 60 chars]\nMETADESC: [max 155 chars]`, "Expert supply chain content writer. Return structured format exactly.", 3500);
+      let internalLinksContext = "";
+      if (addLinks && site) {
+        setGenStatus("Loading your posts for internal links...");
+        try {
+          const r = await wpFetch(site, "/posts?per_page=30&status=publish");
+          const posts = await r.json();
+          if (Array.isArray(posts) && posts.length) {
+            internalLinksContext = posts.map(p => `- ${strip(p.title?.rendered)}: ${site.url.replace(/\/$/, "")}/?p=${p.id}`).join("\n");
+          }
+        } catch {}
+        setGenStatus("Claude is writing your post...");
+      }
+      const linkInstruction = addLinks ? `\nINTERNAL LINKS: Weave 3-5 internal links naturally into the content using these posts (use the exact URLs):\n${internalLinksContext || "No existing posts — skip internal links."}\n\nEXTERNAL LINKS: Include 3-5 external links to authoritative sources (Gartner, McKinsey, APICS, Harvard Business Review, Supply Chain Management Review, or reputable supply chain sites). Use realistic URLs.\n\nFor all links use: <a href="URL" target="_blank" rel="noopener">anchor text</a>\nInternal links: omit target="_blank".\nPlace links naturally in content — never bunch them together.` : "";
+
+      const r = await claude(
+        `Write SEO-optimized WordPress blog post: "${topic}"\nKeyword: ${kw||topic}\nTone: ${tone}\nWords: ~${wc}\n${linkInstruction}\nReturn EXACTLY:\nTITLE: [title]\n---\n[full HTML content]\n---META---\nMETATITLE: [max 60 chars]\nMETADESC: [max 155 chars]`,
+        "Expert supply chain content writer. Follow the format exactly. Weave links naturally into content.",
+        4000
+      );
       const [main, metaPart] = r.split("---META---"); const parts = main.split("---");
-      setOut({ title: (parts[0].match(/TITLE:\s*(.+)/)||[])[1]?.trim()||topic, content: parts[1]?.trim()||main, metaTitle: (metaPart?.match(/METATITLE:\s*(.+)/)||[])[1]?.trim()||topic.slice(0,60), metaDesc: (metaPart?.match(/METADESC:\s*(.+)/)||[])[1]?.trim()||"" });
+      const title = (parts[0].match(/TITLE:\s*(.+)/)||[])[1]?.trim()||topic;
+      const content = parts[1]?.trim()||main;
+      const extCount = (content.match(/target="_blank"/g)||[]).length;
+      setOut({ title, content, metaTitle: (metaPart?.match(/METATITLE:\s*(.+)/)||[])[1]?.trim()||title.slice(0,60), metaDesc: (metaPart?.match(/METADESC:\s*(.+)/)||[])[1]?.trim()||"", extCount });
       setStep("review");
     } catch(e) { setMsg({ type:"error", text:e.message }); }
-    setGen(false);
+    setGen(false); setGenStatus("");
   };
+
   const publish = async () => {
     setPub(true); setMsg(null);
     try {
@@ -203,6 +228,7 @@ function CreatePost({ site }) {
     } catch(e) { setMsg({ type:"error", text:e.message }); }
     setPub(false);
   };
+
   if (!site) return <div className="empty"><div className="empty-icon">✦</div><div className="empty-text">Select a site first</div></div>;
   return (
     <div>
@@ -218,11 +244,22 @@ function CreatePost({ site }) {
           <div className="field"><label className="lbl">Words</label><select className="select-input" value={wc} onChange={e=>setWc(e.target.value)}>{[["800","~800"],["1500","~1500"],["2500","~2500"],["4000","~4000 (pillar)"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
           <div className="field"><label className="lbl">Category</label><select className="select-input" value={cat} onChange={e=>setCat(e.target.value)}><option value="">Uncategorized</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
         </div>
-        <button className="btn btn-primary" onClick={generate} disabled={gen||!topic}>{gen?<><span className="spinner"/> Writing...</>:"✦ Generate Post"}</button>
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"var(--surface2)",borderRadius:7,border:"1px solid var(--border)",marginBottom:14}}>
+          <input type="checkbox" id="addLinks" checked={addLinks} onChange={e=>setAddLinks(e.target.checked)} style={{accentColor:"var(--accent)",width:14,height:14,cursor:"pointer"}}/>
+          <label htmlFor="addLinks" style={{cursor:"pointer",fontSize:11,flex:1}}>
+            <span style={{fontWeight:600,color:"var(--accent)"}}>Auto-add links</span>
+            <span style={{color:"var(--text3)",marginLeft:6}}>3–5 internal links to your posts + 3–5 external authority links</span>
+          </label>
+        </div>
+        <button className="btn btn-primary" onClick={generate} disabled={gen||!topic}>{gen?<><span className="spinner"/> {genStatus||"Writing..."}</>:"✦ Generate Post"}</button>
         {gen && <div className="loading-bar"><div className="loading-bar-fill"/></div>}
       </div>}
       {step==="review" && out && <div>
-        <div className="flex gap-8 items-center mb-12"><button className="btn btn-ghost btn-sm" onClick={()=>setStep("form")}>← Back</button><span className="tag tag-green">Review before publishing</span></div>
+        <div className="flex gap-8 items-center mb-12">
+          <button className="btn btn-ghost btn-sm" onClick={()=>setStep("form")}>← Back</button>
+          <span className="tag tag-green">Review before publishing</span>
+          {out.extCount>0 && <span className="tag tag-purple">🔗 {out.extCount} external links added</span>}
+        </div>
         <div className="card mb-12"><div className="card-title">Title</div><input className="input" value={out.title} onChange={e=>setOut(o=>({...o,title:e.target.value}))}/></div>
         <div className="card mb-12">
           <div className="flex justify-between items-center mb-12"><div className="card-title" style={{margin:0}}>Content</div><span className="text-xs">{out.content.split(" ").length} words</span></div>
@@ -246,6 +283,7 @@ function CreatePost({ site }) {
     </div>
   );
 }
+
 
 // posts manager
 function PostsManager({ site }) {
